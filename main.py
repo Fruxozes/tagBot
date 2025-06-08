@@ -5,6 +5,8 @@ from telegram import Update
 from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes)
 import random
 import requests
+import speech_recognition as sr
+import subprocess
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN_BOT_TELEGRAM")
@@ -125,6 +127,80 @@ async def universal_message_handler(update: Update, context: ContextTypes.DEFAUL
         await msg.reply_text(weather_text, parse_mode="HTML")
 
 
+async def voice_messange_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    if not msg or not msg.voice:
+        return
+
+    try:
+        voice = msg.voice
+        file = await context.bot.get_file(voice.file_id)
+        message_id = msg.message_id
+        ogg_file = f"voice_{message_id}.ogg"
+        wav_file = f"voice_{message_id}.wav"
+        await file.download_to_drive(custom_path=ogg_file)
+        subprocess.run(["ffmpeg", "-y", "-i", ogg_file, wav_file, ], check=True)
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_file) as sourse:
+            audio = recognizer.record(sourse)
+        try:
+            recognized_text = recognizer.recognize_google(audio, language="ru")
+        except sr.UnknownValueError:
+            recognizered_text = "Ты еблан? Я не понял, говори внятнее."
+        except sr.RequestError as e:
+            recognized_text = f"У меня проблемы, хуй тебе а не распознование: {e}"
+        await  msg.reply_text(f"Текст голосового:\n{recognized_text}")
+    except Exception as e:
+        logging.error("Ошибка при обработке голосового сообщения: %s", e)
+        await msg.reply_text("Ошибка при обработке голосового сообщения.")
+    finally:
+        for filename in (ogg_file, wav_file):
+            try:
+                if os.path.exists(filename):
+                    os.remove(filename)
+            except Exception as ex:
+                logging.error("Ошибка удаления файла (какого хуя?) %s: %s:", filename, ex)
+
+async def video_note_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    if not msg or not msg.video_note:
+        return
+    video_file = None
+    wav_file = None
+
+    try:
+        video_note = msg.video_note
+        file = await context.bot.get_file(video_note.file_id)
+        message_id = msg.message_id
+        video_file = f"video_{message_id}.mp4"
+        wav_file = f"video_{message_id}.wav"
+        await file.download_to_drive(custom_path=video_file)
+        subprocess.run([
+            "ffmpeg", "-y", "-i", video_file, "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", wav_file],
+            check=True
+        )
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_file) as source:
+            audio = recognizer.record(source)
+        try:
+            recognized_text = recognizer.recognize_google(audio, language="ru-RU")
+        except sr.UnknownValueError:
+            recognized_text = "Я не понял, говори внятнее, ебло ты."
+        except sr.RequestError as e:
+            recognized_text = f"У меня проблемы, хуй тебе а не распознование: {e}"
+        await msg.reply_text(f"Распознанный текст кружка:\n{recognized_text}")
+    except Exception as e:
+        logging.error("Ошибка при обработке кружка: %s", e)
+        await msg.reply_text("Ошибка при обработке кружка.")
+    finally:
+        for fname in (video_file, wav_file):
+            if fname and os.path.exists(fname):
+                try:
+                    os.remove(fname)
+                except Exception as ex:
+                    logging.error("Ошибка удаления файла (какого хуя?) %s: %s", fname, ex)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "Привет! Отправь название города из следующего списка: " + ", ".join(CITIES.keys()),
@@ -157,4 +233,6 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("all", all))
     app.add_handler(MessageHandler(filters.TEXT, universal_message_handler))
+    app.add_handler(MessageHandler(filters.VOICE, voice_messange_handler))
+    app.add_handler(MessageHandler(filters.VIDEO_NOTE, video_note_handler))
     app.run_polling()
